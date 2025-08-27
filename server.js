@@ -4,7 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
-const multer = require('multer'); // npm install multer
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -14,329 +14,15 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Variable para controlar inicialización de DB
+let dbInitialized = false;
+
 // Crear directorio para imágenes si no existe
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     console.log('Directorio uploads creado:', UPLOADS_DIR);
 }
-
-// Middleware
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    credentials: false
-}));
-
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Servir imágenes estáticamente
-app.use('/uploads', (req, res, next) => {
-    // Log para debugging
-    console.log(`📁 Petición de archivo: ${req.method} ${req.url}`);
-    console.log(`📂 Ruta completa solicitada: ${req.path}`);
-    
-    // Verificar si el archivo existe
-    const filePath = path.join(UPLOADS_DIR, req.path);
-    
-    if (!fs.existsSync(filePath)) {
-        console.error(`❌ Archivo no encontrado: ${filePath}`);
-        return res.status(404).json({
-            error: 'Archivo no encontrado',
-            path: req.path,
-            fullPath: filePath
-        });
-    }
-    
-    console.log(`✅ Archivo encontrado: ${filePath}`);
-    next();
-}, express.static(UPLOADS_DIR, {
-    // Configuraciones adicionales para mejor compatibilidad
-    maxAge: '1d', // Cache por 1 día
-    etag: true,
-    lastModified: true,
-    setHeaders: (res, path, stat) => {
-        // Configurar headers CORS para imágenes
-        res.set('Access-Control-Allow-Origin', '*');
-        res.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type');
-        
-        // Configurar tipo de contenido correcto basado en extensión
-        const ext = path.toLowerCase().split('.').pop();
-        switch (ext) {
-            case 'jpg':
-            case 'jpeg':
-                res.set('Content-Type', 'image/jpeg');
-                break;
-            case 'png':
-                res.set('Content-Type', 'image/png');
-                break;
-            case 'gif':
-                res.set('Content-Type', 'image/gif');
-                break;
-            case 'webp':
-                res.set('Content-Type', 'image/webp');
-                break;
-            default:
-                res.set('Content-Type', 'application/octet-stream');
-        }
-        
-        console.log(`📤 Sirviendo: ${path} (${stat.size} bytes)`);
-    }
-}));
-
-// 🔧 NUEVO: Endpoint para verificar archivos específicos
-app.get('/api/verify-image/:filename(*)', (req, res) => {
-    try {
-        const filename = req.params.filename;
-        const filePath = path.join(UPLOADS_DIR, filename);
-        
-        console.log(`🔍 Verificando imagen: ${filename}`);
-        console.log(`📂 Ruta completa: ${filePath}`);
-        
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({
-                exists: false,
-                message: 'Archivo no encontrado',
-                filename,
-                fullPath: filePath
-            });
-        }
-        
-        const stats = fs.statSync(filePath);
-        const url = `/uploads/${filename}`;
-        
-        res.json({
-            exists: true,
-            filename,
-            url,
-            size: stats.size,
-            modified: stats.mtime,
-            fullPath: filePath
-        });
-        
-    } catch (error) {
-        console.error('Error verificando imagen:', error);
-        res.status(500).json({
-            exists: false,
-            error: error.message
-        });
-    }
-});
-
-// 🔧 NUEVO: Endpoint para listar archivos en directorio
-app.get('/api/list-uploads/:equipoId?', (req, res) => {
-    try {
-        const equipoId = req.params.equipoId;
-        const targetDir = equipoId ? path.join(UPLOADS_DIR, equipoId) : UPLOADS_DIR;
-        
-        if (!fs.existsSync(targetDir)) {
-            return res.status(404).json({
-                error: 'Directorio no encontrado',
-                path: targetDir
-            });
-        }
-        
-        const files = fs.readdirSync(targetDir, { withFileTypes: true })
-            .filter(dirent => dirent.isFile())
-            .map(dirent => {
-                const filePath = path.join(targetDir, dirent.name);
-                const stats = fs.statSync(filePath);
-                const relativePath = equipoId ? `${equipoId}/${dirent.name}` : dirent.name;
-                
-                return {
-                    name: dirent.name,
-                    path: relativePath,
-                    url: `/uploads/${relativePath}`,
-                    size: stats.size,
-                    modified: stats.mtime
-                };
-            });
-        
-        res.json({
-            directory: equipoId || 'root',
-            count: files.length,
-            files
-        });
-        
-    } catch (error) {
-        console.error('Error listando archivos:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-// 🔧 MEJORADO: Health check incluyendo verificación de uploads
-app.get('/api/health', async (req, res) => {
-    const health = {
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        database: 'disconnected',
-        storage: 'local',
-        uploadsDir: UPLOADS_DIR,
-        uptime: process.uptime(),
-        mode: 'local_storage'
-    };
-    
-    try {
-        // Verificar base de datos
-        const { data, error } = await supabase.from('computadores').select('count', { count: 'exact' });
-        if (!error) {
-            health.database = 'connected';
-        }
-        
-        // Verificar directorio de uploads
-        health.uploadsExists = fs.existsSync(UPLOADS_DIR);
-        health.uploadsWritable = true;
-        
-        // Verificar que se pueden escribir archivos
-        try {
-            const testFile = path.join(UPLOADS_DIR, 'test.txt');
-            fs.writeFileSync(testFile, 'test');
-            fs.unlinkSync(testFile);
-        } catch (e) {
-            health.uploadsWritable = false;
-        }
-        
-        // 🆕 Contar archivos en uploads
-        try {
-            const countFiles = (dir) => {
-                let count = 0;
-                const items = fs.readdirSync(dir, { withFileTypes: true });
-                for (const item of items) {
-                    if (item.isFile()) {
-                        count++;
-                    } else if (item.isDirectory()) {
-                        count += countFiles(path.join(dir, item.name));
-                    }
-                }
-                return count;
-            };
-            
-            health.totalFiles = countFiles(UPLOADS_DIR);
-        } catch (e) {
-            health.totalFiles = 'unknown';
-        }
-        
-        health.status = dbInitialized && health.uploadsWritable ? 'ok' : 'error';
-        
-        // Log estado del servidor
-        console.log('🏥 Health check:', {
-            database: health.database,
-            uploads: health.uploadsExists ? 'exists' : 'missing',
-            writable: health.uploadsWritable ? 'yes' : 'no',
-            totalFiles: health.totalFiles
-        });
-        
-    } catch (err) {
-        health.status = 'error';
-        health.error = err.message;
-        console.error('❌ Health check failed:', err);
-        return res.status(500).json(health);
-    }
-    
-    res.json(health);
-});
-
-// Inicializar Supabase (solo base de datos)
-async function initializeSupabase() {
-    try {
-        console.log('Inicializando Supabase (solo base de datos)...');
-        
-        const { data, error } = await supabase.from('computadores').select('count', { count: 'exact' });
-        
-        if (error && error.code === '42P01') {
-            console.log('TABLA NO EXISTE - Ejecuta este SQL en Supabase:');
-            console.log(`
-CREATE TABLE IF NOT EXISTS computadores (
-    id SERIAL PRIMARY KEY,
-    equipo_id VARCHAR(100) UNIQUE NOT NULL,
-    serial_number VARCHAR(100) NOT NULL,
-    placa_ml VARCHAR(100),
-    latitud DECIMAL(10, 8),
-    longitud DECIMAL(11, 8),
-    direccion_automatica TEXT,
-    ubicacion_manual TEXT,
-    responsable VARCHAR(200) NOT NULL,
-    cargo VARCHAR(100) NOT NULL,
-    estado VARCHAR(20) NOT NULL CHECK (estado IN ('operativo', 'mantenimiento', 'dañado')),
-    windows_update VARCHAR(5) NOT NULL CHECK (windows_update IN ('si', 'no')),
-    imagenes JSONB DEFAULT '[]'::jsonb,
-    observaciones TEXT,
-    problemas_detectados TEXT,
-    fecha_revision TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    revisor VARCHAR(100)
-);
-
-CREATE INDEX IF NOT EXISTS idx_serial_number ON computadores(serial_number);
-CREATE INDEX IF NOT EXISTS idx_equipo_id ON computadores(equipo_id);
-CREATE INDEX IF NOT EXISTS idx_estado ON computadores(estado);
-CREATE INDEX IF NOT EXISTS idx_fecha_revision ON computadores(fecha_revision);
-
-ALTER TABLE computadores ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Permitir todo acceso" ON computadores FOR ALL USING (true);
-ALTER TABLE computadores REPLICA IDENTITY FULL;
-            `);
-            throw new Error('Tabla no existe - ejecuta el SQL mostrado arriba');
-        } else if (error) {
-            throw error;
-        }
-        
-        console.log('Supabase (base de datos) conectado exitosamente');
-        console.log('Almacenamiento: LOCAL - Directorio:', UPLOADS_DIR);
-        dbInitialized = true;
-        
-    } catch (error) {
-        console.error('Error al inicializar Supabase:', error);
-        throw error;
-    }
-}
-
-function checkDatabase(req, res, next) {
-    if (!dbInitialized) {
-        return res.status(500).json({
-            error: 'Base de datos no disponible',
-            details: 'Supabase no se ha inicializado correctamente'
-        });
-    }
-    next();
-}
-
-function handleSupabaseError(error, res, operation = 'operación') {
-    console.error(`Error en ${operation}:`, error);
-    
-    let statusCode = 500;
-    let message = 'Error interno del servidor';
-    let details = error.message;
-    
-    if (error.code === '23505') {
-        statusCode = 400;
-        message = 'El ID del equipo ya existe';
-        details = 'El identificador del equipo debe ser único';
-    } else if (error.code === '23514') {
-        statusCode = 400;
-        message = 'Valor no válido';
-        details = 'El valor proporcionado no cumple con las restricciones';
-    } else if (error.code === '23502') {
-        statusCode = 400;
-        message = 'Campo requerido faltante';
-    }
-    
-    res.status(statusCode).json({
-        error: message,
-        details: details,
-        code: error.code || 'SUPABASE_ERROR'
-    });
-}
-
-
-
-// Variable para controlar inicialización de DB
-let dbInitialized = false;
 
 // Función para guardar imagen localmente
 function saveImageLocally(base64Data, equipoId, imageIndex) {
@@ -387,12 +73,19 @@ function saveImageLocally(base64Data, equipoId, imageIndex) {
 // Función para eliminar imagen local
 function deleteImageLocally(filename) {
     try {
+        // Solo eliminar si no es URL de Supabase
+        if (filename.startsWith('http')) {
+            console.log(`Imagen de Supabase, no eliminar localmente: ${filename}`);
+            return true;
+        }
+        
         const fullPath = path.join(UPLOADS_DIR, filename);
         if (fs.existsSync(fullPath)) {
             fs.unlinkSync(fullPath);
-            console.log(`Imagen eliminada: ${filename}`);
+            console.log(`Imagen local eliminada: ${filename}`);
             return true;
         }
+        console.log(`Imagen local no encontrada: ${filename}`);
         return false;
     } catch (error) {
         console.error('Error eliminando imagen:', error);
@@ -400,7 +93,199 @@ function deleteImageLocally(filename) {
     }
 }
 
-// OBTENER COMPUTADORES
+// Middleware
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: false
+}));
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Servir imágenes estáticamente
+app.use('/uploads', (req, res, next) => {
+    console.log(`Petición de archivo: ${req.method} ${req.url}`);
+    console.log(`Ruta completa solicitada: ${req.path}`);
+    
+    const filePath = path.join(UPLOADS_DIR, req.path);
+    
+    if (!fs.existsSync(filePath)) {
+        console.error(`Archivo no encontrado: ${filePath}`);
+        return res.status(404).json({
+            error: 'Archivo no encontrado',
+            path: req.path,
+            fullPath: filePath
+        });
+    }
+    
+    console.log(`Archivo encontrado: ${filePath}`);
+    next();
+}, express.static(UPLOADS_DIR, {
+    maxAge: '1d',
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, path, stat) => {
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type');
+        
+        const ext = path.toLowerCase().split('.').pop();
+        switch (ext) {
+            case 'jpg':
+            case 'jpeg':
+                res.set('Content-Type', 'image/jpeg');
+                break;
+            case 'png':
+                res.set('Content-Type', 'image/png');
+                break;
+            case 'gif':
+                res.set('Content-Type', 'image/gif');
+                break;
+            case 'webp':
+                res.set('Content-Type', 'image/webp');
+                break;
+            default:
+                res.set('Content-Type', 'application/octet-stream');
+        }
+        
+        console.log(`Sirviendo: ${path} (${stat.size} bytes)`);
+    }
+}));
+
+// Inicializar Supabase (solo base de datos)
+async function initializeSupabase() {
+    try {
+        console.log('Inicializando Supabase (solo base de datos)...');
+        
+        const { data, error } = await supabase.from('computadores').select('count', { count: 'exact' });
+        
+        if (error && error.code === '42P01') {
+            console.log('TABLA NO EXISTE - Ejecuta este SQL en Supabase:');
+            console.log(`
+CREATE TABLE IF NOT EXISTS computadores (
+    id SERIAL PRIMARY KEY,
+    equipo_id VARCHAR(100) UNIQUE NOT NULL,
+    serial_number VARCHAR(100) NOT NULL,
+    placa_ml VARCHAR(100),
+    latitud DECIMAL(10, 8),
+    longitud DECIMAL(11, 8),
+    direccion_automatica TEXT,
+    ubicacion_manual TEXT,
+    responsable VARCHAR(200) NOT NULL,
+    cargo VARCHAR(100) NOT NULL,
+    estado VARCHAR(20) NOT NULL CHECK (estado IN ('operativo', 'mantenimiento', 'dañado')),
+    windows_update VARCHAR(5) NOT NULL CHECK (windows_update IN ('si', 'no')),
+    imagenes JSONB DEFAULT '[]'::jsonb,
+    observaciones TEXT,
+    problemas_detectados TEXT,
+    fecha_revision TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revisor VARCHAR(100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_serial_number ON computadores(serial_number);
+CREATE INDEX IF NOT EXISTS idx_equipo_id ON computadores(equipo_id);
+CREATE INDEX IF NOT EXISTS idx_estado ON computadores(estado);
+CREATE INDEX IF NOT EXISTS idx_fecha_revision ON computadores(fecha_revision);
+
+ALTER TABLE computadores ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Permitir todo acceso" ON computadores FOR ALL USING (true);
+ALTER TABLE computadores REPLICA IDENTITY FULL;
+            `);
+            throw new Error('Tabla no existe - ejecuta el SQL mostrado arriba');
+        } else if (error) {
+            throw error;
+        }
+        
+        console.log('Supabase (base de datos) conectado exitosamente');
+        console.log('Almacenamiento: HIBRIDO - Supabase Storage + Local');
+        dbInitialized = true;
+        
+    } catch (error) {
+        console.error('Error al inicializar Supabase:', error);
+        throw error;
+    }
+}
+
+function checkDatabase(req, res, next) {
+    if (!dbInitialized) {
+        return res.status(500).json({
+            error: 'Base de datos no disponible',
+            details: 'Supabase no se ha inicializado correctamente'
+        });
+    }
+    next();
+}
+
+function handleSupabaseError(error, res, operation = 'operación') {
+    console.error(`Error en ${operation}:`, error);
+    
+    let statusCode = 500;
+    let message = 'Error interno del servidor';
+    let details = error.message;
+    
+    if (error.code === '23505') {
+        statusCode = 400;
+        message = 'El ID del equipo ya existe';
+        details = 'El identificador del equipo debe ser único';
+    } else if (error.code === '23514') {
+        statusCode = 400;
+        message = 'Valor no válido';
+        details = 'El valor proporcionado no cumple con las restricciones';
+    } else if (error.code === '23502') {
+        statusCode = 400;
+        message = 'Campo requerido faltante';
+    }
+    
+    res.status(statusCode).json({
+        error: message,
+        details: details,
+        code: error.code || 'SUPABASE_ERROR'
+    });
+}
+
+// HEALTH CHECK
+app.get('/api/health', async (req, res) => {
+    const health = {
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        database: 'disconnected',
+        storage: 'hybrid',
+        uploadsDir: UPLOADS_DIR,
+        uptime: process.uptime(),
+        mode: 'supabase_storage + local_storage'
+    };
+    
+    try {
+        const { data, error } = await supabase.from('computadores').select('count', { count: 'exact' });
+        if (!error) {
+            health.database = 'connected';
+        }
+        
+        health.uploadsExists = fs.existsSync(UPLOADS_DIR);
+        health.uploadsWritable = true;
+        
+        try {
+            const testFile = path.join(UPLOADS_DIR, 'test.txt');
+            fs.writeFileSync(testFile, 'test');
+            fs.unlinkSync(testFile);
+        } catch (e) {
+            health.uploadsWritable = false;
+        }
+        
+        health.status = dbInitialized && health.uploadsWritable ? 'ok' : 'error';
+    } catch (err) {
+        health.status = 'error';
+        health.error = err.message;
+        return res.status(500).json(health);
+    }
+    
+    res.json(health);
+});
+
+// OBTENER COMPUTADORES - CORREGIDO para manejar Supabase Storage + Local
 app.get('/api/computadores', checkDatabase, async (req, res) => {
     try {
         console.log('Obteniendo lista de computadores...');
@@ -419,16 +304,35 @@ app.get('/api/computadores', checkDatabase, async (req, res) => {
         const { data, error } = await query;
         if (error) throw error;
         
-        // Verificar que las imágenes existen localmente
+        // CORREGIDO: Procesar imágenes para compatibilidad híbrida
         const computadoresConImagenes = data.map(computador => {
             if (computador.imagenes && Array.isArray(computador.imagenes)) {
-                const imagenesVerificadas = computador.imagenes.filter(imagen => {
-                    const fullPath = path.join(UPLOADS_DIR, imagen.filename);
-                    return fs.existsSync(fullPath);
-                });
+                const imagenesProc = computador.imagenes.map(imagen => {
+                    // Si la imagen tiene URL de Supabase Storage, pasarla como filename
+                    if (imagen.url && imagen.url.includes('supabase.co')) {
+                        return {
+                            ...imagen,
+                            filename: imagen.url  // Pasar URL completa como filename
+                        };
+                    }
+                    
+                    // Para imágenes locales, verificar que existan
+                    if (imagen.filename && !imagen.filename.startsWith('http')) {
+                        const fullPath = path.join(UPLOADS_DIR, imagen.filename);
+                        if (fs.existsSync(fullPath)) {
+                            return imagen;
+                        } else {
+                            console.log(`Imagen local no encontrada: ${imagen.filename}`);
+                            return null;
+                        }
+                    }
+                    
+                    return imagen;
+                }).filter(img => img !== null);
+                
                 return {
                     ...computador,
-                    imagenes: imagenesVerificadas
+                    imagenes: imagenesProc
                 };
             }
             return computador;
@@ -461,7 +365,7 @@ app.post('/api/computadores', checkDatabase, async (req, res) => {
             });
         }
         
-        // Procesar imágenes localmente
+        // Procesar imágenes localmente (nuevas imágenes se guardan en local)
         let imagenesGuardadas = [];
         if (imagenes && Array.isArray(imagenes)) {
             console.log(`Procesando ${imagenes.length} imágenes localmente...`);
@@ -536,7 +440,7 @@ app.put('/api/computadores/:id', checkDatabase, async (req, res) => {
                 const imagen = imagenes[i];
                 
                 if (imagen.base64 && imagen.base64.startsWith('data:image')) {
-                    // Nueva imagen
+                    // Nueva imagen - guardar localmente
                     const resultado = saveImageLocally(imagen.base64, `${equipo_id}-update`, i + 1);
                     
                     if (resultado) {
@@ -549,16 +453,28 @@ app.put('/api/computadores/:id', checkDatabase, async (req, res) => {
                         });
                     }
                 } else if (imagen.filename) {
-                    // Imagen existente - verificar que existe
-                    const fullPath = path.join(UPLOADS_DIR, imagen.filename);
-                    if (fs.existsSync(fullPath)) {
+                    // Imagen existente - puede ser Supabase Storage o local
+                    if (imagen.filename.startsWith('http')) {
+                        // URL de Supabase Storage - mantener tal como está
                         imagenesFinales.push({
                             title: imagen.title || `Imagen ${i + 1}`,
-                            filename: imagen.filename,
-                            url: imagen.url,
+                            filename: imagen.filename,  // URL completa
+                            url: imagen.filename,       // URL completa
                             size: imagen.size || 0,
                             fecha_subida: imagen.fecha_subida || new Date().toISOString()
                         });
+                    } else {
+                        // Imagen local - verificar que existe
+                        const fullPath = path.join(UPLOADS_DIR, imagen.filename);
+                        if (fs.existsSync(fullPath)) {
+                            imagenesFinales.push({
+                                title: imagen.title || `Imagen ${i + 1}`,
+                                filename: imagen.filename,
+                                url: imagen.url,
+                                size: imagen.size || 0,
+                                fecha_subida: imagen.fecha_subida || new Date().toISOString()
+                            });
+                        }
                     }
                 }
             }
@@ -601,14 +517,12 @@ app.delete('/api/computadores/:id', checkDatabase, async (req, res) => {
         const { id } = req.params;
         console.log(`Eliminando registro ID: ${id}`);
         
-        // Obtener datos antes de eliminar
         const { data: computador } = await supabase
             .from('computadores')
             .select('imagenes')
             .eq('id', id)
             .single();
         
-        // Eliminar registro
         const { data, error } = await supabase
             .from('computadores')
             .delete()
@@ -621,7 +535,7 @@ app.delete('/api/computadores/:id', checkDatabase, async (req, res) => {
             return res.status(404).json({ error: 'Registro no encontrado' });
         }
         
-        // Eliminar imágenes locales
+        // Eliminar solo imágenes locales (no las de Supabase Storage)
         if (computador && computador.imagenes && Array.isArray(computador.imagenes)) {
             for (const imagen of computador.imagenes) {
                 if (imagen.filename) {
@@ -750,12 +664,12 @@ app.get('/api/export/excel', checkDatabase, async (req, res) => {
 // RUTA PRINCIPAL
 app.get('/', (req, res) => {
     res.json({
-        message: 'API de soporte técnico con almacenamiento local funcionando',
+        message: 'API de soporte técnico con almacenamiento híbrido funcionando',
         features: [
             'Base de datos: Supabase PostgreSQL',
-            'Almacenamiento: Local file system',
-            'Imágenes: Guardadas en servidor local',
-            'Tiempo real: Disponible con Supabase'
+            'Almacenamiento: Híbrido (Supabase Storage + Local)',
+            'Imágenes existentes: Supabase Storage',
+            'Imágenes nuevas: Servidor local'
         ],
         endpoints: {
             health: '/api/health',
@@ -765,7 +679,7 @@ app.get('/', (req, res) => {
             uploads: '/uploads'
         },
         storage: {
-            type: 'local',
+            type: 'hybrid',
             directory: UPLOADS_DIR,
             url: '/uploads'
         }
@@ -779,7 +693,7 @@ app.use((err, req, res, next) => {
         error: 'Error interno del servidor',
         details: err.message,
         timestamp: new Date().toISOString(),
-        service: 'local_storage'
+        service: 'hybrid_storage'
     });
 });
 
@@ -805,20 +719,21 @@ app.use('*', (req, res) => {
 // Iniciar servidor
 async function startServer() {
     try {
-        console.log('Iniciando servidor con almacenamiento local...');
+        console.log('Iniciando servidor con almacenamiento híbrido...');
         
         await initializeSupabase();
         
         app.listen(PORT, '0.0.0.0', () => {
             console.log('Servidor iniciado exitosamente');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log(`Servidor local: http://localhost:${PORT}`);
+            console.log(`Servidor: http://localhost:${PORT}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('CARACTERÍSTICAS:');
+            console.log('CONFIGURACIÓN:');
             console.log('   Base de datos: Supabase PostgreSQL');
-            console.log('   Almacenamiento: LOCAL file system');
-            console.log(`   Directorio imágenes: ${UPLOADS_DIR}`);
-            console.log('   URL imágenes: /uploads/:filename');
+            console.log('   Almacenamiento: HÍBRIDO');
+            console.log('   - Imágenes existentes: Supabase Storage');
+            console.log('   - Imágenes nuevas: Servidor local');
+            console.log(`   Directorio local: ${UPLOADS_DIR}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         });
         
@@ -845,6 +760,4 @@ process.on('unhandledRejection', (reason, promise) => {
     process.exit(1);
 });
 
-// Iniciar la aplicación
 startServer();
-
