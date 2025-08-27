@@ -93,6 +93,51 @@ function deleteImageLocally(filename) {
     }
 }
 
+// 🆕 NUEVA FUNCIÓN: Procesar imágenes para respuesta híbrida
+function processImagenesParaRespuesta(imagenes) {
+    if (!imagenes || !Array.isArray(imagenes)) {
+        return [];
+    }
+    
+    return imagenes.map(imagen => {
+        // Si filename ya es una URL de Supabase Storage, mantenerla
+        if (imagen.filename && imagen.filename.includes('supabase.co/storage/')) {
+            console.log(`🗃️ Manteniendo URL Supabase: ${imagen.filename}`);
+            return {
+                ...imagen,
+                url: imagen.filename  // URL completa de Supabase
+            };
+        }
+        
+        // Para archivos locales, verificar que existan
+        if (imagen.filename && !imagen.filename.startsWith('http')) {
+            const fullPath = path.join(UPLOADS_DIR, imagen.filename);
+            if (fs.existsSync(fullPath)) {
+                console.log(`📁 Archivo local encontrado: ${imagen.filename}`);
+                return {
+                    ...imagen,
+                    url: `/uploads/${imagen.filename}`
+                };
+            } else {
+                console.warn(`❌ Archivo local no encontrado: ${imagen.filename}`);
+                return null;
+            }
+        }
+        
+        // Si filename es otra URL completa, mantenerla
+        if (imagen.filename && imagen.filename.startsWith('http')) {
+            console.log(`🔗 URL completa detectada: ${imagen.filename}`);
+            return {
+                ...imagen,
+                url: imagen.filename
+            };
+        }
+        
+        console.warn(`⚠️ Imagen sin filename válido:`, imagen);
+        return null;
+    }).filter(img => img !== null);
+}
+
 // Middleware
 app.use(cors({
     origin: '*',
@@ -285,7 +330,7 @@ app.get('/api/health', async (req, res) => {
     res.json(health);
 });
 
-// OBTENER COMPUTADORES - CORREGIDO para manejar Supabase Storage + Local
+// OBTENER COMPUTADORES - CORREGIDO PARA PROCESAMIENTO HÍBRIDO REAL
 app.get('/api/computadores', checkDatabase, async (req, res) => {
     try {
         console.log('Obteniendo lista de computadores...');
@@ -304,38 +349,19 @@ app.get('/api/computadores', checkDatabase, async (req, res) => {
         const { data, error } = await query;
         if (error) throw error;
         
-        // CORREGIDO: Procesar imágenes para compatibilidad híbrida
+        // 🛠️ PROCESAMIENTO HÍBRIDO CORREGIDO
         const computadoresConImagenes = data.map(computador => {
-            if (computador.imagenes && Array.isArray(computador.imagenes)) {
-                const imagenesProc = computador.imagenes.map(imagen => {
-                    // Si la imagen tiene URL de Supabase Storage, pasarla como filename
-                    if (imagen.url && imagen.url.includes('supabase.co')) {
-                        return {
-                            ...imagen,
-                            filename: imagen.url  // Pasar URL completa como filename
-                        };
-                    }
-                    
-                    // Para imágenes locales, verificar que existan
-                    if (imagen.filename && !imagen.filename.startsWith('http')) {
-                        const fullPath = path.join(UPLOADS_DIR, imagen.filename);
-                        if (fs.existsSync(fullPath)) {
-                            return imagen;
-                        } else {
-                            console.log(`Imagen local no encontrada: ${imagen.filename}`);
-                            return null;
-                        }
-                    }
-                    
-                    return imagen;
-                }).filter(img => img !== null);
-                
-                return {
-                    ...computador,
-                    imagenes: imagenesProc
-                };
-            }
-            return computador;
+            console.log(`Procesando imágenes para equipo: ${computador.equipo_id}`);
+            console.log(`Imágenes originales:`, computador.imagenes);
+            
+            const imagenesProcessadas = processImagenesParaRespuesta(computador.imagenes);
+            
+            console.log(`Imágenes procesadas:`, imagenesProcessadas);
+            
+            return {
+                ...computador,
+                imagenes: imagenesProcessadas
+            };
         });
         
         console.log(`Se encontraron ${computadoresConImagenes.length} computadores`);
@@ -343,6 +369,39 @@ app.get('/api/computadores', checkDatabase, async (req, res) => {
         
     } catch (error) {
         handleSupabaseError(error, res, 'obtener computadores');
+    }
+});
+
+// OBTENER COMPUTADOR INDIVIDUAL - CORREGIDO
+app.get('/api/computadores/:id', checkDatabase, async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log(`Obteniendo computador ID: ${id}`);
+        
+        const { data, error } = await supabase
+            .from('computadores')
+            .select('*')
+            .eq('id', id)
+            .single();
+            
+        if (error) throw error;
+        
+        if (!data) {
+            return res.status(404).json({ error: 'Computador no encontrado' });
+        }
+        
+        // Procesar imágenes híbridas
+        const imagenesProcessadas = processImagenesParaRespuesta(data.imagenes);
+        
+        console.log(`Computador encontrado con ${imagenesProcessadas.length} imágenes`);
+        
+        res.json({
+            ...data,
+            imagenes: imagenesProcessadas
+        });
+        
+    } catch (error) {
+        handleSupabaseError(error, res, 'obtener computador individual');
     }
 });
 
@@ -434,7 +493,7 @@ app.put('/api/computadores/:id', checkDatabase, async (req, res) => {
         // Procesar imágenes (nuevas y existentes)
         let imagenesFinales = [];
         if (imagenes && Array.isArray(imagenes)) {
-            console.log(`Procesando ${imagenes.length} imágenes...`);
+            console.log(`Procesando ${imagenes.length} imágenes para actualización...`);
             
             for (let i = 0; i < imagenes.length; i++) {
                 const imagen = imagenes[i];
@@ -453,29 +512,15 @@ app.put('/api/computadores/:id', checkDatabase, async (req, res) => {
                         });
                     }
                 } else if (imagen.filename) {
-                    // Imagen existente - puede ser Supabase Storage o local
-                    if (imagen.filename.startsWith('http')) {
-                        // URL de Supabase Storage - mantener tal como está
-                        imagenesFinales.push({
-                            title: imagen.title || `Imagen ${i + 1}`,
-                            filename: imagen.filename,  // URL completa
-                            url: imagen.filename,       // URL completa
-                            size: imagen.size || 0,
-                            fecha_subida: imagen.fecha_subida || new Date().toISOString()
-                        });
-                    } else {
-                        // Imagen local - verificar que existe
-                        const fullPath = path.join(UPLOADS_DIR, imagen.filename);
-                        if (fs.existsSync(fullPath)) {
-                            imagenesFinales.push({
-                                title: imagen.title || `Imagen ${i + 1}`,
-                                filename: imagen.filename,
-                                url: imagen.url,
-                                size: imagen.size || 0,
-                                fecha_subida: imagen.fecha_subida || new Date().toISOString()
-                            });
-                        }
-                    }
+                    // Imagen existente - mantener tal como está
+                    console.log(`Manteniendo imagen existente: ${imagen.filename}`);
+                    imagenesFinales.push({
+                        title: imagen.title || `Imagen ${i + 1}`,
+                        filename: imagen.filename,  // Mantener filename original (URL o ruta)
+                        url: imagen.url || imagen.filename,
+                        size: imagen.size || 0,
+                        fecha_subida: imagen.fecha_subida || new Date().toISOString()
+                    });
                 }
             }
         }
@@ -730,8 +775,8 @@ async function startServer() {
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('CONFIGURACIÓN:');
             console.log('   Base de datos: Supabase PostgreSQL');
-            console.log('   Almacenamiento: HÍBRIDO');
-            console.log('   - Imágenes existentes: Supabase Storage');
+            console.log('   Almacenamiento: HÍBRIDO REAL');
+            console.log('   - Imágenes existentes: URLs de Supabase Storage');
             console.log('   - Imágenes nuevas: Servidor local');
             console.log(`   Directorio local: ${UPLOADS_DIR}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
