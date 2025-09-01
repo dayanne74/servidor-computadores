@@ -208,6 +208,47 @@ ALTER TABLE computadores REPLICA IDENTITY FULL;
         throw error;
     }
 }
+
+// FUNCIÓN MIDDLEWARE - MOVIDA AQUÍ ARRIBA
+function checkDatabase(req, res, next) {
+    if (!dbInitialized) {
+        return res.status(500).json({
+            error: 'Base de datos no disponible',
+            details: 'Supabase no se ha inicializado correctamente'
+        });
+    }
+    next();
+}
+
+// FUNCIÓN DE MANEJO DE ERRORES - MOVIDA AQUÍ ARRIBA
+function handleSupabaseError(error, res, operation = 'operación') {
+    console.error(`Error en ${operation}:`, error);
+    
+    let statusCode = 500;
+    let message = 'Error interno del servidor';
+    let details = error.message;
+    
+    if (error.code === '23505') {
+        statusCode = 400;
+        message = 'El ID del equipo ya existe';
+        details = 'El identificador del equipo debe ser único';
+    } else if (error.code === '23514') {
+        statusCode = 400;
+        message = 'Valor no válido';
+        details = 'El valor proporcionado no cumple con las restricciones';
+    } else if (error.code === '23502') {
+        statusCode = 400;
+        message = 'Campo requerido faltante';
+    }
+    
+    res.status(statusCode).json({
+        error: message,
+        details: details,
+        code: error.code || 'SUPABASE_ERROR'
+    });
+}
+
+// 🔧 ENDPOINT PARA CORREGIR IMÁGENES - AHORA EN LA POSICIÓN CORRECTA
 app.post('/api/fix-imagenes', checkDatabase, async (req, res) => {
     try {
         console.log('🔧 Iniciando corrección de URLs de imágenes...');
@@ -289,6 +330,7 @@ app.post('/api/fix-imagenes', checkDatabase, async (req, res) => {
     }
 });
 
+// ENDPOINT PARA VERIFICAR STATUS DE IMÁGENES
 app.get('/api/imagenes-status', checkDatabase, async (req, res) => {
     try {
         const { data: computadores, error } = await supabase
@@ -347,6 +389,7 @@ app.get('/api/imagenes-status', checkDatabase, async (req, res) => {
     }
 });
 
+// FUNCIÓN AUXILIAR PARA CORRECCIÓN (ya no se usa directamente pero la mantenemos)
 async function corregirURLsImagenes() {
     try {
         console.log('🔧 Corrigiendo URLs de imágenes de Supabase Storage...');
@@ -407,46 +450,6 @@ async function corregirURLsImagenes() {
         console.error('❌ Error corrigiendo URLs:', error);
         return 0;
     }
-}
-
-// 🚀 ENDPOINT PARA EJECUTAR LA CORRECCIÓN MANUAL
-
-
-function checkDatabase(req, res, next) {
-    if (!dbInitialized) {
-        return res.status(500).json({
-            error: 'Base de datos no disponible',
-            details: 'Supabase no se ha inicializado correctamente'
-        });
-    }
-    next();
-}
-
-function handleSupabaseError(error, res, operation = 'operación') {
-    console.error(`Error en ${operation}:`, error);
-    
-    let statusCode = 500;
-    let message = 'Error interno del servidor';
-    let details = error.message;
-    
-    if (error.code === '23505') {
-        statusCode = 400;
-        message = 'El ID del equipo ya existe';
-        details = 'El identificador del equipo debe ser único';
-    } else if (error.code === '23514') {
-        statusCode = 400;
-        message = 'Valor no válido';
-        details = 'El valor proporcionado no cumple con las restricciones';
-    } else if (error.code === '23502') {
-        statusCode = 400;
-        message = 'Campo requerido faltante';
-    }
-    
-    res.status(statusCode).json({
-        error: message,
-        details: details,
-        code: error.code || 'SUPABASE_ERROR'
-    });
 }
 
 // HEALTH CHECK
@@ -879,7 +882,9 @@ app.get('/', (req, res) => {
             computadores: '/api/computadores',
             estadisticas: '/api/estadisticas',
             export: '/api/export/excel',
-            uploads: '/uploads'
+            uploads: '/uploads',
+            fix_imagenes: '/api/fix-imagenes',
+            imagenes_status: '/api/imagenes-status'
         },
         storage: {
             type: 'hybrid',
@@ -914,6 +919,8 @@ app.use('*', (req, res) => {
             'PUT /api/computadores/:id',
             'DELETE /api/computadores/:id',
             'GET /api/estadisticas',
+            'POST /api/fix-imagenes',
+            'GET /api/imagenes-status',
             'GET /uploads/:filename'
         ]
     });
@@ -937,6 +944,10 @@ async function startServer() {
             console.log('   - Imágenes existentes: Supabase Storage');
             console.log('   - Imágenes nuevas: Servidor local');
             console.log(`   Directorio local: ${UPLOADS_DIR}`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('ENDPOINTS DISPONIBLES:');
+            console.log('   POST /api/fix-imagenes - Corregir URLs');
+            console.log('   GET /api/imagenes-status - Status de imágenes');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         });
         
