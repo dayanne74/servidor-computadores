@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recuperar Imágenes - Supabase Storage</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #718096;
+            font-size: 16px;
+        }
+        .info-box {
+            background: #e6fffa;
+            border: 1px solid #38b2ac;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .warning-box {
+            background: #fff5e6;
+            border: 1px solid #ed8936;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: transform 0.2s;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+        }
+        .button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .success {
+            background: #f0fff4;
+            border: 1px solid #48bb78;
+            color: #2f855a;
+        }
+        .error {
+            background: #fed7d7;
+            border: 1px solid #e53e3e;
+            color: #c53030;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f7fafc;
+            border-radius: 6px;
+        }
+        .step-number {
+            background: #4299e1;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">🔧 Recuperación de Imágenes</div>
+            <div class="subtitle">Corregir URLs de Supabase Storage</div>
+        </div>
+
+        <div class="info-box">
+            <h3>✅ Situación Confirmada:</h3>
+            <ul>
+                <li>Las 83 imágenes están seguras en <strong>Supabase Storage</strong></li>
+                <li>Solo necesitan URLs corregidas</li>
+                <li>Recuperación automática disponible</li>
+            </ul>
+        </div>
+
+        <div class="warning-box">
+            <h3>⚠️ Antes de ejecutar:</h3>
+            <ol>
+                <li>Asegúrate de haber agregado el código del fix al server.js</li>
+                <li>Redeploya tu aplicación en Koyeb</li>
+                <li>Verifica que tu app esté funcionando</li>
+            </ol>
+        </div>
+
+        <div class="step">
+            <div class="step-number">1</div>
+            <div>
+                <strong>URL del servidor:</strong><br>
+                <input type="text" id="serverUrl" value="https://comparable-maribel-servidort-4ac64637.koyeb.app" 
+                       style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #cbd5e0; border-radius: 4px;">
+            </div>
+        </div>
+
+        <div class="step">
+            <div class="step-number">2</div>
+            <div><strong>Ejecutar corrección de URLs</strong></div>
+        </div>
+
+        <button class="button" onclick="ejecutarFix()" id="fixButton">
+            🚀 Recuperar las 83 Imágenes
+        </button>
+
+        <button class="button" onclick="verificarHealth()" style="background: #48bb78;">
+            🏥 Verificar Estado del Servidor
+        </button>
+
+        <div id="resultado"></div>
+    </div>
+
+    <script>
+        async function ejecutarFix() {
+            const button = document.getElementById('fixButton');
+            const resultado = document.getElementById('resultado');
+            const serverUrl = document.getElementById('serverUrl').value;
+            
+            button.disabled = true;
+            button.textContent = '🔄 Corrigiendo URLs...';
+            
+            try {
+                const response = await fetch(`${serverUrl}/api/fix-imagenes`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultado.innerHTML = `<div class="result success">
+✅ ÉXITO: ${data.message}
+
+📊 Equipos actualizados: ${data.equipos_actualizados}
+🎯 Acción: ${data.accion}
+
+🎉 ¡Las imágenes han sido recuperadas exitosamente!
+
+Ahora puedes:
+- Verificar las imágenes en tu aplicación
+- Las URLs ahora apuntan directamente a Supabase Storage
+- Las imágenes deberían cargarse correctamente
+                    </div>`;
+                } else {
+                    throw new Error(data.error || 'Error desconocido');
+                }
+                
+            } catch (error) {
+                resultado.innerHTML = `<div class="result error">
+❌ ERROR: ${error.message}
+
+Posibles causas:
+- El endpoint /api/fix-imagenes no existe (falta agregar el código)
+- Servidor no está disponible
+- Error de conexión con Supabase
+
+Solución: Verifica que hayas agregado el código del fix al server.js
+                </div>`;
+            } finally {
+                button.disabled = false;
+                button.textContent = '🚀 Recuperar las 83 Imágenes';
+            }
+        }
+        
+        async function verificarHealth() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const resultado = document.getElementById('resultado');
+            
+            try {
+                const response = await fetch(`${serverUrl}/api/health`);
+                const data = await response.json();
+                
+                resultado.innerHTML = `<div class="result success">
+🏥 Estado del Servidor:
+${JSON.stringify(data, null, 2)}
+                </div>`;
+                
+            } catch (error) {
+                resultado.innerHTML = `<div class="result error">
+❌ Error verificando servidor: ${error.message}
+                </div>`;
+            }
+        }
+    </script>
+</body>
+</html>

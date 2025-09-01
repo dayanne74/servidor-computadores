@@ -208,6 +208,145 @@ ALTER TABLE computadores REPLICA IDENTITY FULL;
         throw error;
     }
 }
+app.post('/api/fix-imagenes', checkDatabase, async (req, res) => {
+    try {
+        console.log('🔧 Iniciando corrección de URLs de imágenes...');
+        
+        // Obtener todos los computadores con imágenes
+        const { data: computadores, error } = await supabase
+            .from('computadores')
+            .select('*')
+            .not('imagenes', 'is', null);
+            
+        if (error) throw error;
+        
+        let actualizados = 0;
+        let totalImagenes = 0;
+        
+        for (const computador of computadores) {
+            if (computador.imagenes && Array.isArray(computador.imagenes)) {
+                let necesitaActualizacion = false;
+                
+                // Corregir URLs de cada imagen
+                const imagenesCorregidas = computador.imagenes.map(imagen => {
+                    totalImagenes++;
+                    
+                    if (imagen.filename && imagen.url && imagen.url.includes('/uploads/')) {
+                        // URL antigua de Koyeb - corregir a Supabase
+                        const nuevaURL = supabase.storage
+                            .from('imagenes-soporte')
+                            .getPublicUrl(imagen.filename).data.publicUrl;
+                            
+                        necesitaActualizacion = true;
+                        
+                        return {
+                            ...imagen,
+                            url: nuevaURL,
+                            url_anterior: imagen.url, // Guardar referencia
+                            corregida_el: new Date().toISOString()
+                        };
+                    }
+                    return imagen;
+                });
+                
+                // Actualizar solo si es necesario
+                if (necesitaActualizacion) {
+                    const { error: updateError } = await supabase
+                        .from('computadores')
+                        .update({ imagenes: imagenesCorregidas })
+                        .eq('id', computador.id);
+                        
+                    if (!updateError) {
+                        actualizados++;
+                        console.log(`✅ URLs corregidas para ${computador.equipo_id}: ${imagenesCorregidas.length} imágenes`);
+                    } else {
+                        console.error(`❌ Error actualizando ${computador.equipo_id}:`, updateError);
+                    }
+                }
+            }
+        }
+        
+        console.log(`🎉 RECUPERACIÓN COMPLETADA: ${actualizados} equipos con URLs corregidas`);
+        console.log(`📊 Total de imágenes procesadas: ${totalImagenes}`);
+        
+        res.json({
+            success: true,
+            message: 'URLs de imágenes corregidas exitosamente',
+            equipos_actualizados: actualizados,
+            total_imagenes_procesadas: totalImagenes,
+            accion: 'Las imágenes ahora deberían ser accesibles desde Supabase Storage',
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('❌ Error ejecutando corrección:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Error corrigiendo URLs',
+            details: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+app.get('/api/imagenes-status', checkDatabase, async (req, res) => {
+    try {
+        const { data: computadores, error } = await supabase
+            .from('computadores')
+            .select('id, equipo_id, imagenes')
+            .not('imagenes', 'is', null);
+            
+        if (error) throw error;
+        
+        let totalEquipos = computadores.length;
+        let totalImagenes = 0;
+        let imagenesSupabase = 0;
+        let imagenesLocales = 0;
+        let imagenesBrotas = 0;
+        
+        const analisis = computadores.map(comp => {
+            const imagenes = comp.imagenes || [];
+            totalImagenes += imagenes.length;
+            
+            const imagenesInfo = imagenes.map(img => {
+                if (img.url && img.url.includes('supabase.co')) {
+                    imagenesSupabase++;
+                    return { ...img, tipo: 'supabase', estado: 'ok' };
+                } else if (img.url && img.url.includes('/uploads/')) {
+                    imagenesBrotas++;
+                    return { ...img, tipo: 'koyeb_rota', estado: 'rota' };
+                } else {
+                    imagenesLocales++;
+                    return { ...img, tipo: 'local', estado: 'ok' };
+                }
+            });
+            
+            return {
+                id: comp.id,
+                equipo_id: comp.equipo_id,
+                cantidad_imagenes: imagenes.length,
+                imagenes: imagenesInfo
+            };
+        });
+        
+        res.json({
+            resumen: {
+                total_equipos: totalEquipos,
+                total_imagenes: totalImagenes,
+                imagenes_supabase: imagenesSupabase,
+                imagenes_locales: imagenesLocales,
+                imagenes_rotas: imagenesBrotas
+            },
+            necesita_fix: imagenesBrotas > 0,
+            analisis_completo: analisis
+        });
+        
+    } catch (error) {
+        console.error('Error obteniendo status:', error);
+        res.status(500).json({ error: 'Error obteniendo estado de imágenes' });
+    }
+});
+
 async function corregirURLsImagenes() {
     try {
         console.log('🔧 Corrigiendo URLs de imágenes de Supabase Storage...');
@@ -271,21 +410,7 @@ async function corregirURLsImagenes() {
 }
 
 // 🚀 ENDPOINT PARA EJECUTAR LA CORRECCIÓN MANUAL
-app.post('/api/fix-imagenes', checkDatabase, async (req, res) => {
-    try {
-        const equiposActualizados = await corregirURLsImagenes();
-        
-        res.json({
-            message: 'URLs de imágenes corregidas exitosamente',
-            equipos_actualizados: equiposActualizados,
-            accion: 'Las imágenes ahora deberían ser accesibles desde Supabase Storage'
-        });
-        
-    } catch (error) {
-        console.error('Error ejecutando corrección:', error);
-        res.status(500).json({ error: 'Error corrigiendo URLs' });
-    }
-});
+
 
 function checkDatabase(req, res, next) {
     if (!dbInitialized) {
