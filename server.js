@@ -208,6 +208,84 @@ ALTER TABLE computadores REPLICA IDENTITY FULL;
         throw error;
     }
 }
+async function corregirURLsImagenes() {
+    try {
+        console.log('🔧 Corrigiendo URLs de imágenes de Supabase Storage...');
+        
+        // Obtener todos los computadores con imágenes
+        const { data: computadores, error } = await supabase
+            .from('computadores')
+            .select('*')
+            .not('imagenes', 'is', null);
+            
+        if (error) throw error;
+        
+        let actualizados = 0;
+        
+        for (const computador of computadores) {
+            if (computador.imagenes && Array.isArray(computador.imagenes)) {
+                let necesitaActualizacion = false;
+                
+                // Corregir URLs de cada imagen
+                const imagenesCorregidas = computador.imagenes.map(imagen => {
+                    if (imagen.filename && imagen.url && imagen.url.includes('/uploads/')) {
+                        // URL antigua de Koyeb - corregir a Supabase
+                        const nuevaURL = supabase.storage
+                            .from('imagenes-soporte')
+                            .getPublicUrl(imagen.filename).data.publicUrl;
+                            
+                        necesitaActualizacion = true;
+                        
+                        return {
+                            ...imagen,
+                            url: nuevaURL,
+                            url_anterior: imagen.url, // Guardar referencia
+                            corregida_el: new Date().toISOString()
+                        };
+                    }
+                    return imagen;
+                });
+                
+                // Actualizar solo si es necesario
+                if (necesitaActualizacion) {
+                    const { error: updateError } = await supabase
+                        .from('computadores')
+                        .update({ imagenes: imagenesCorregidas })
+                        .eq('id', computador.id);
+                        
+                    if (!updateError) {
+                        actualizados++;
+                        console.log(`✅ URLs corregidas para ${computador.equipo_id}: ${imagenesCorregidas.length} imágenes`);
+                    }
+                }
+            }
+        }
+        
+        console.log(`🎉 RECUPERACIÓN COMPLETADA: ${actualizados} equipos con URLs corregidas`);
+        return actualizados;
+        
+    } catch (error) {
+        console.error('❌ Error corrigiendo URLs:', error);
+        return 0;
+    }
+}
+
+// 🚀 ENDPOINT PARA EJECUTAR LA CORRECCIÓN MANUAL
+app.post('/api/fix-imagenes', checkDatabase, async (req, res) => {
+    try {
+        const equiposActualizados = await corregirURLsImagenes();
+        
+        res.json({
+            message: 'URLs de imágenes corregidas exitosamente',
+            equipos_actualizados: equiposActualizados,
+            accion: 'Las imágenes ahora deberían ser accesibles desde Supabase Storage'
+        });
+        
+    } catch (error) {
+        console.error('Error ejecutando corrección:', error);
+        res.status(500).json({ error: 'Error corrigiendo URLs' });
+    }
+});
 
 function checkDatabase(req, res, next) {
     if (!dbInitialized) {
